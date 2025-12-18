@@ -19,7 +19,7 @@ async def lifespan(app: FastAPI):
     global r, core, executor
     logger.info("Starting dependencies...")
     
-    r = Redis("127.0.0.1", port=6379)
+    r = Redis(host="127.0.0.1", port=6379)
     core = DetectorCore()
     core.setup()
     executor = ThreadPoolExecutor(max_workers=3)

@@ -4,7 +4,7 @@ from starlette.websockets import WebSocketState
 from concurrent.futures import ThreadPoolExecutor
 
 from fast_plate_ocr import LicensePlateRecognizer
-from paddleocr import TextRecognition
+from paddleocr import PaddleOCR, TextRecognition
 import numpy as np
 import torch
 import cv2
@@ -33,6 +33,9 @@ default_plate_pattern = r"^[A-Z]{2}\d{4}[A-Z]{2}$"
 temp_plate_pattern = r"^\d{2}[A-Z]{2}\d{4}$"
 plate_pattern = re.compile(f"{default_plate_pattern}|{temp_plate_pattern}")
 
+# if sys.platform == "win32":
+#         pathlib.PosixPath = pathlib.WindowsPath
+
 class DetectorCore:
     def __init__(self):
         self._plate_model = None
@@ -55,12 +58,11 @@ class DetectorCore:
                 "yolov5", "custom", path=os.path.join(BASE_DIR, "models", "plate.pt"),
                 source="local", device="cpu", force_reload=True
             )
-            if self._plate_model: logger.debug("YOLOv5 Plate model loaded.")
-            else: logger.error("Failed to load YOLOv5 plate model.")
+
+            # self._vin_model = PaddleOCR(text_recognition_model_name="PP-OCRv5_mobile_rec", device="cpu")
 
             self._onnx = LicensePlateRecognizer('european-plates-mobile-vit-v2-model', device='cpu')
-            if self._onnx: logger.debug("Fast Plate OCR model loaded.")
-            else: logger.error("Failed to load Fast Plate OCR model.")
+            logger.debug("Setup finished.")
 
             time.sleep(10)
         except Exception as e:
@@ -101,6 +103,23 @@ class DetectorCore:
 
         if res: return sorted(res, key=lambda x: x[0], reverse=True)[0][1]
 
+    def detect_vin(self, images):
+        crops = self._plate_model(images).crop(save=False)
+        if not crops: return []
+
+        res = []
+        for c in crops:
+            if c['conf'] > 0.7:
+                img = np.ascontiguousarray(c['im'])
+                gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                res.append((c['conf'], gray))
+        return sorted(res, key=lambda x: x[0], reverse=True)[:3]
+    
+    def recognize_vin(self, crops):
+        res = self._vin_model.predict([c[1] for c in crops])
+        for i in res:
+            print(i)
+
     def del_car(self, id: str, status: str):
         pipe = self._r.pipeline()
         pipe.delete(f"car:{id}:images")
@@ -115,7 +134,7 @@ class DetectorCore:
         pipe.execute()
 
 
-    def process_car(self, id: str, images = None):
+    def process_car(self, id: str, mode: str, images = None):
 
         start = time.time()
         
@@ -128,17 +147,18 @@ class DetectorCore:
                 self.del_car(id, "next")
                 return
             
-            crops = self.detect_plate(images)
-            if not crops:
-                self.del_car(id, "next")
-                return
-            
-            plate = self.recognize_plate(crops)
-            if plate: 
-                self.save_car(id, plate)
-                return plate
-            else:
-                self.del_car(id, "next")
+            if mode == "plate":
+                crops = self.detect_plate(images)
+                if not crops:
+                    self.del_car(id, "next")
+                    return
+                
+                plate = self.recognize_plate(crops)
+                if plate: 
+                    self.save_car(id, plate)
+                    return plate
+                else:
+                    self.del_car(id, "next")
 
         except Exception as e:
             self.del_car(id, "next")
