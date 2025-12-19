@@ -24,17 +24,30 @@ import pathlib
 import sys
 
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = pathlib.Path(__file__).parent
+YOLO_DIR = BASE_DIR / "yolov5"
+sys.path.append(str(YOLO_DIR))
+
+from yolov5.utils.augmentations import letterbox
+
 logger = logging.getLogger("vintor-detect")
-logger.setLevel(logging.DEBUG)
 
 
 default_plate_pattern = r"^[A-Z]{2}\d{4}[A-Z]{2}$"
 temp_plate_pattern = r"^\d{2}[A-Z]{2}\d{4}$"
 plate_pattern = re.compile(f"{default_plate_pattern}|{temp_plate_pattern}")
 
-# if sys.platform == "win32":
-#         pathlib.PosixPath = pathlib.WindowsPath
+def setup_logger(logger: logging.Logger):
+    logger.setLevel(logging.DEBUG)
+    handler = logging.StreamHandler()
+
+    formatter = logging.Formatter("%(asctime)s - %(name)s - [%(levelname)s] %(funcName)s: %(message)s")
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+
+
+if sys.platform == "win32":
+        pathlib.PosixPath = pathlib.WindowsPath
 
 class DetectorCore:
     def __init__(self):
@@ -45,6 +58,8 @@ class DetectorCore:
         self._r = None
 
         self._pattern = plate_pattern
+        setup_logger(logger)
+
 
     def setup(self):
         logger.info("Setting up models...")
@@ -96,12 +111,12 @@ class DetectorCore:
         res = []
         for p, c in zip(plates, confs):
             avg = round(sum(c) / len(c), 3)
-            if avg >= 0.75:
+            if avg >= 0.73:
                 p = p.replace("_", "").strip()
                 if self._pattern.match(p):
                     res.append((avg, p))
 
-        if res: return sorted(res, key=lambda x: x[0], reverse=True)[0][1]
+        if res: return max(res, key=lambda x: x[0])[1]
 
     def detect_vin(self, images):
         crops = self._plate_model(images).crop(save=False)
@@ -167,7 +182,8 @@ class DetectorCore:
             logger.debug(f"[TIME] Processing time for {id}: {round(time.time() - start, 3)}s")
 
 if __name__ == "__main__":
+    if plate_pattern.match("17AX7912"): print("loggg")
     if sys.platform == "win32":
         pathlib.PosixPath = pathlib.WindowsPath
-    api = DetectorCore()
-    api.setup()
+    # api = DetectorCore()
+    # api.setup()

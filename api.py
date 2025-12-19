@@ -10,16 +10,27 @@ import logging
 from typing import List
 import asyncio
 
+
+
+
 logger = logging.getLogger("detector-api")
 
+def setup_logger(logger: logging.Logger):
+    logger.setLevel(logging.DEBUG)
+    handler = logging.StreamHandler()
 
+    formatter = logging.Formatter("%(asctime)s - %(name)s - [%(levelname)s] %(funcName)s: %(message)s")
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global r, core, executor
+    setup_logger(logger)
+
     logger.info("Starting dependencies...")
     
-    r = Redis(host="127.0.0.1", port=6379)
+    r = Redis(host="127.0.0.1", port=6379, decode_responses=True)
     core = DetectorCore()
     core.setup()
     executor = ThreadPoolExecutor(max_workers=3)
@@ -54,7 +65,6 @@ async def health_check():
 async def receive_images(mode: str, id: str, files: List[UploadFile] = File(...)):
 
     try:
-        # TODO mode
         if files and id:
             pipe = r.pipeline()
             for f in files:
@@ -64,9 +74,8 @@ async def receive_images(mode: str, id: str, files: List[UploadFile] = File(...)
             await pipe.execute()
 
             loop = asyncio.get_event_loop()
-            future = loop.run_in_executor(executor, core.process_car, id)
+            future = loop.run_in_executor(executor, core.process_car, id, mode)
 
-            logger.debug(f"Received car: {id} with {len(files)} images")
             return JSONResponse(status_code=200, content={
                 "status": "ok" if not future.cancelled() else "bad",
                 "id": id})
@@ -82,19 +91,22 @@ async def websocket(websocket: WebSocket, id: str):
     try:
         while True:
             status = await r.get(f"car:{id}:status")
-            status = status.decode()
+            
+            if status in ("process", "received", "wait"): 
+                await websocket.send_json({"status": status})
 
-            await websocket.send_json({"status": status})
-            if status == "next": await r.set(f"car:{id}:status", "wait", ex=600)
+            elif status == "next": 
+                await websocket.send_json({"status": status})
+                await r.set(f"car:{id}:status", "wait", ex=600)
 
             elif status == "done": 
                 res = await r.get(f"car:{id}:res")
                 await websocket.send_json({
                     "status": "done", 
-                    "result": res.decode()
+                    "result": res
                 })
                 break
-
+            
             elif status == "error":
                 await websocket.send_json({"status": status})
                 break
